@@ -1,0 +1,346 @@
+---
+title: 'Citibike Rebalancing Graphic'
+author:
+  - name: Audrey Lee
+date: '`r Sys.Date()`'
+output: distill::distill_article
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  eval = TRUE,
+  echo = TRUE,
+  message = FALSE,
+  error = FALSE,
+  warning = FALSE
+)
+```
+
+This project explores the effects of pandemic ridership and rebalancing. It considers other transportation options not considered in the NYT graphic found at: *How Coronavirus Has Changed New York City Transit, in One Chart*. New York Times, March 8, 2021. [https://www.nytimes.com/interactive/2021/03/08/climate/nyc-transit-covid.html](https://www.nytimes.com/interactive/2021/03/08/climate/nyc-transit-covid.html).
+
+```{r}
+library(tidyverse)
+library(distill)
+```
+
+
+# importing and summarising
+
+Imported the data into a data frame named `d` and showed a summary:
+
+```{r}
+d <- read_csv("data/MTA_recent_ridership_data.csv")
+summary(d)
+```
+
+
+# tidying
+
+The column or variable names will be difficult to work with as they are currently written. We renamed the variables so the data frame will be easier to work with in code:
+
+```{r}
+new_names <- 
+  str_c(
+    rep(c('subway', 'bus', 'lirr', 
+          'mta', 'access_ride', 'bridge_tunnel'), 
+        each = 2), 
+    rep(c("total", "change"), 
+        times = 6), 
+    sep = '_'
+    )
+colnames(d) <- c('date', new_names)
+```
+
+Also, notice some of the variables are of the wrong type. The variable `date`, for example, is an array of type `char`. Let's change this to a proper `date` type. And all the variables with a percentage are also of a type `char`. Finally, the now renamed variable `mta_total` is of type char.
+
+# more tidying
+
+Next, we'll clean the variables holding percentages as a type `char`. We'll do this by removing the `%` and recasting the variables, all in one set of piping functions:
+
+```{r}
+d <- d %>% 
+  mutate( date = as_date(date, format = '%m/%d/%Y') ) %>%
+  mutate( mta_total = as.numeric(mta_total) ) %>%
+  mutate( across( where(is.character), ~str_replace_all(.x, pattern = '%', replacement = '')) ) %>%
+  mutate( across( where(is.character), ~as.numeric(.x)) )
+```
+
+In R, missing data is represented as `NA`. Let's try to visualize whether we have missing data, say, as a so-called heatmap of the data frame.
+
+```{r}
+d %>%
+mutate(observation = row_number()) %>%
+pivot_longer(
+  cols = -c(date, observation),
+  names_to = 'variable', 
+  values_to = 'value') %>%
+mutate(
+  is_missing = is.na(value)
+) %>%
+
+ggplot() +
+geom_raster(
+  mapping = aes(
+    x = observation,
+    y = variable,
+    fill = is_missing
+  )
+) +
+scale_fill_manual(
+  values = c('black', 'darkorange'),
+  breaks = c(FALSE, TRUE)
+)
+
+```
+
+> The above heatmap shows that data frame 'd' has missing data around observation 650-700 for the variables "mta_total", "mta_change", "lirr_total", and "lirr_change". There also appears to be a few additional missing values above and below observation 100. These are visualized by the orange areas, which return "TRUE" for the presence of missing values.
+
+
+# transforming
+
+This dataset was used to visualize several graphics in the New York Times: Penney, Veronica. *How Coronavirus Has Changed New York City Transit, in One Chart*. New York Times, March 8, 2021. [https://www.nytimes.com/interactive/2021/03/08/climate/nyc-transit-covid.html](https://www.nytimes.com/interactive/2021/03/08/climate/nyc-transit-covid.html).
+
+The first graphic maps a three-day rolling average of the change in ridership since the lockdown in New York on March 22 for several of the transportation types {`bridge and tunnel traffic`, `Buses`, `Subways`, `LIRR`, `Metro-North`}. Let's see how much the three day rolling average *affects the decoding* of this graphic compared with our non-averaged values.
+
+The best way to encode the raw change for each transportation type requires we transform our data frame from *wide* to *long* format.
+
+More specifically, the data frame currently includes each transportation type as a different variable. Instead, we want to have one variable we will call `transportation_type` and each observation will include the type and the remaining information.
+
+Thus, our goal is to make our data frame look something like this:
+
+| date       | transportation_type | change |
+| :--------- | :------------------ | :----- |
+| 2021-09-16 | subway              | -57.6  |
+| 2021-09-16 | bus                 | -57.1  |
+| 2021-09-16 | lirr                | -56    |
+| ...        | ...                 | ...    |
+
+To do that, we will use the function `pivot_longer` and then subtract 100 from your new variable called `change`. Review the help file for this function. Now, we need to specify which columns to pivot, and what names to give them.
+
+
+```{r}
+d <- d %>%
+  select( contains(c('date', 'change')) ) %>%
+  rename_with(~ str_remove_all(.x, '_change')) %>%
+
+  #we could've used cols = -date instead of listing everything
+  pivot_longer(
+    cols = c("subway","bus","lirr","mta","access_ride","bridge_tunnel"),
+    names_to = "transportation_type",
+    values_to = "change") %>%
+  mutate(change = change - 100)
+```
+
+
+# visualizing
+
+Now that we have our data frame `d` in long format, we can create our visual. For this visual, we want to only graph the transportation types shown in the NYT article: `bridge_tunnel`, `bus`, `lirr`, `mta`, and `subway`. The easiest way to create the graphic will be to filter the other transportation types from the data frame, and graph with the `ggplot` function and the `geom_line`.
+
+```{r}
+d %>%
+  filter(
+    transportation_type != "access_ride"
+  ) %>%
+
+  ggplot() +
+  
+  scale_color_manual(
+    breaks = c('bridge_tunnel', 'bus', 'subway', 'lirr', 'mta'),
+    values = c('#367C9D', '#61A0CA', '#91BBF9', '#993865', '#773452')
+  ) +
+  
+  labs(
+    x = 'Date',
+    y = 'Percent decline from 2019 ridership'
+  ) +
+  
+  geom_line(aes(x = date, y = change, color = transportation_type))
+  
+
+```
+
+
+# communication — basic insights
+
+> Considering a mixed audience of Citi Bike executives working on rebalancing, Citi Bike executives might prefer to reference our graph of daily changes when they hope to see evidence of outliers, indicating a significantly higher or lower level of activity on a certain day. In terms of rebalancing, this may help the Citi Bike team correlate these outliers to attributing causes that would otherwise be overlooked. For example, large traffic disturbances, non-annual city events, and sudden weather changes may not persist across multiple days. In the NYT version featuring the rolling average, these outliers are smoothed out by the lower level of granularity and sensitivity. While the broader patterns shown in the NYT graph might be useful in tracking large-scale transportation trends, like in the case of pandemic ridership changes, tracking daily changes might make sense when needing to drill down and categorize small, but disruptive events.
+
+> Had we added changes in Citi Bike ridership alongside other transportation types, it is likely the changes seen in bikeshare ridership since the pandemic would mirror the recovery trend seen in other private transportation types. Post-Coronavirus, the effects of social distancing habits and potential for virus resurgences have resulted in many New Yorkers wary of using public transportation like subways and buses. Private transportation options like private cars, denoted by "bridge and tunnel traffic" in the NYT graphic, have experienced a slow but markedly larger rebound in ridership since the 2020 lockdown. The single-rider, private aspect of biking may mirror this magnitude of recovery. 
+
+> Penney, V. (2021). How Coronavirus Has Changed New York City Transit, in One Chart. *The New York Times*. https://www.nytimes.com/interactive/2021/03/08/climate/nyc-transit-covid.html
+
+Next, we'll continue exploring Citibike data by incorporating a visual of activity and docking station imbalance created by [Columbia University's Center for Spatial Research](https://c4sr.columbia.edu/projects/citibike-rebalancing-study) in 2013. We'll try reconstructing the graphic with our data.
+
+You can download and zoom in on a high resolution pdf of the Spatial Information Design Lab's graphic here: <http://c4sr.spatialinformationdesignlab.org/sites/default/files/Activity_Matrix_Composite.pdf>.
+
+# communication, identifying data types and visual encodings
+
+> The data variables encoded in the graphic include the time, stop location, activity type, and activity level. Time has been mapped to the x-axis and is presented as a numeric variable on an interval scale in this graphic, as the intervals between successive points are evenly spaced by hour and not labelled in a categorical manner. Stop location is mapped to the y-axis and is a nominal variable, as the names are categorical and lack an inherent ranking. Activity type representing ingoing and outgoing bike activity is a continuous, quantitative variable. It has been mapped to color hue, where the attributes include saturated oranges representing a stop receiving lots of arrivals, and saturated blues representing lots of departures. Activity level is a numeric variable on a ratio scale, as there is a clear zero point where activity type can be zero. This has been mapped to a luminance gradient, where high luminance levels are attributed to high activity at a stop.
+
+# communication, assessing effectiveness of visual encodings
+
+> This graphic's visual encodings lie primarily in its use of color, specifically hue and luminance, to allow the audience to compare which stops have the highest activity, and what type. These encodings are effective since bright colors, which naturally create visual weight when contrasted against the dark grey background, draw in the eyes of viewers. The choice to use orange and blue hues to contrast ingoing and outgoing activity, respectively, allow audiences to compare which stops riders are leaving from or arriving at more often. The audience may also easily compare which stops are most popular, and which may not be serving many riders.
+
+# communication, interpreting visual encodings
+
+> The graphic might help Citibike executives understand where to target rebalancing efforts with regard to time of day and location. Vibrant and highly saturated cells in the graphic entail that rebalancing efforts are most needed in that area. With the time placed on the x-axis, viewers can quickly compare activity levels temporally, parsing out peak usage hours and patterns throughout one day. With docking stations listed on the y-axis, audiences can quickly note whether certain stops are uncharacteristically more popular than others, or which locations are underused. The colors in this graphic used in conjunction with the data placed on the x and y axes allow for efficient assessment for targeted rebalancing efforts.
+
+# workflow, tidying and transforming data
+
+Next, we will re-construct the main components of this graphic. To get started, we will first load our main library,
+
+```{r}
+library(tidyverse)
+```
+
+and gather data from the New York City Bike Share data repository: <https://ride.citibikenyc.com/system-data>. 
+
+```{r}
+savefile <- "data/201909-citibike-tripdata.csv"
+
+if (!file.exists(savefile)) {
+  url <- "https://s3.amazonaws.com/tripdata/201909-citibike-tripdata.csv.zip"
+  download.file(url = url, destfile = savefile )
+  }
+
+df <- read_csv(savefile)
+```
+
+Next, we will *tidy* our data frame by renaming variables.
+
+```{r}
+df <- df %>% rename_with(~ gsub(' ', '_', .) )
+```
+
+Explore the data frame for missing data. You'll notice that some start and end station names are missing. We cannot reconstruct Columbia University Center for Spatial Research's graphic without these values, so we will filter those `NA` values out of our data frame, keeping in mind that our result is now conditional on the data we still have. We also want to just consider observations with an `end_station_name` that is also used as a `start_station_name`.
+
+```{r}
+df <- 
+  df %>% 
+  filter(
+    if_any(contains('station_name'), ~ !is.na(.)),
+    end_station_name %in% start_station_name
+  )
+```
+
+We need to change the structure of our data so that we can map data values onto the visual encodings used in the Center for Spatial Research's graphic.
+
+More specifically, we need to count the number of rides both starting and ending at each station name at each hour of the day, averaged over the number of days in our data set. We'll need to *pivot* some of the data and create *new variables*. Specifically, we will pivot two variables — `start_station_name` and `end_station_name` into long format, and create variables for day of month (`day`) and hour of day (`hour`), like so:
+
+```{r}
+df <- 
+  df %>%
+  pivot_longer(
+    cols = c(start_station_name, end_station_name), 
+    names_to = "start_end",
+    values_to = "station_name"
+  ) %>%
+  mutate(
+    day  = format( if_else(start_end == "start_station_name", starttime, stoptime), "%d" ),
+    hour = format( if_else(start_end == "start_station_name", starttime, stoptime), "%H" )
+  ) %>%
+  mutate(
+    station_name = fct_reorder(station_name, desc(station_name))
+  )
+```
+
+The pivot results in creating separate observations, from the perspective of a docking station (instead of the perspective of a ride), for both types of events: *a bike parking and a bike leaving*.
+
+With the pivoted data frame, we can now group our data by station name and hour, and calculate averages we'll need to map onto visual variables.
+
+Create new variables `activity` and `balance`, where `activity` holds the average number of rides or observations at each station name each hour and where `balance` hold the average difference between rides beginning at the station and rides ending at the station. While the Center for Spatial Research's graphic only considered weekdays, let's consider all days of the week.
+
+```{r}
+df <- 
+  df %>%
+  group_by(station_name, hour, .drop = FALSE) %>%
+
+  summarise(
+    activity = mean(n()),
+    balance = sum(ifelse(start_end == "start_station_name", 1, -1))
+  ) %>%
+
+  ungroup()
+```
+
+Inspect this data frame, and compare with the original imported data frame to understand how each step of the above code changed its structure. Start to consider how we will map these data variables onto the visual variables used in the Center for Spatial Research's *Activity and Balance* graphic.
+
+We'll now consider how to scale data values to map their data ranges to the appropriate visual ranges for each channel of color: hue, chroma (saturation), and luminance.
+
+# workflow, scaling data
+
+The code below scales the data variables to the ranges of the visual variables to roughly reconstruct the Lab's graphical mappings.
+
+```{r}
+library(scales)
+
+df <-
+  df %>%
+  mutate(
+    hue = if_else(balance < 0, 50, 200),
+    saturation =
+      rescale(
+        abs(balance),
+        from = range(0, max(abs(balance))),
+        to   = c(0, 100)
+      ),
+    luminance =
+      rescale(
+        activity,
+        from = range(0, (activity)),
+        to   = c(0, 100)
+      )
+  )
+```
+
+# workflow, mapping data to visual channels
+
+In the final step of reconstructing the Lab's data to visual mappings, we are ready to map our data onto the visual variables. The Center's *Activity and Balance* graphic resembles a so-called *heatmap*.
+
+
+```{r}
+p <- 
+  df %>%
+  ggplot() +
+  scale_fill_identity() +
+  geom_tile(
+    mapping = aes(
+      x = hour,
+      y = station_name,
+      fill = hcl(hue, saturation, luminance)
+    ),
+    width = 0.95,
+    height = 0.95
+  ) +
+  theme_dark() +
+  theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "#333333"),
+    axis.text.x = element_text(color = "#888888", size = 16 / .pt),
+    axis.text.y = element_text(color = "#888888", size =  7 / .pt)
+  ) +
+  labs(x = "", y = "")
+
+# The next line of code will save the graphic as a pdf onto your working
+# directory so that you can separately open and zoom in while reviewing it.
+ggsave("activity_balance2019.pdf", plot = p, width = 8, height = 40)
+
+p
+```
+
+# communication and interpretation
+
+> An audience's understanding of visual encodings can very well hinge on scaling data and visual ranges properly, so as not to warp or create perceived skews in the data. Widening and narrowing the data ranges would either amplify or diminish small fluctuations in the data. For example, widening the data range implies drilling down into, or including more values in the data set, which might reveal certain patterns that are actually ambiguous or insignificant. Narrowing the data range could prevent this from happening by illustrating the larger, overarching trends, but risks hiding outliers in the dataset. Widening and narrowing the visual range, such as including a broader or more restrictive range of hues in the graphic, could produce similar effects mentioned above. Widening the visual range would allow certain trends or patterns to emerge more visibly, whereas narrowing the range would simplify the graphic visually. Choosing appropriate scaling for data and visuals requires considering the data in hand, how variable it is, and the goals of the message to be conveyed by the graphic.
+
+# communication, decoding and interpretation: critical thinking
+
+We've finished roughly reconstructing the Center's Activity and Balance graphic, updated with later data from September 2019, six years after the original graphic but still before the pandemic. You should find that some of the patterns originally described by the Center still show up. Review the Center's description of the Activity and Balance graphic: <https://c4sr.columbia.edu/projects/citibike-rebalancing-study>.
+
+Notice that the Center's description of its graphic and data do not, however, discuss whether empty and full docking stations, and rebalancing efforts by Citi Bike, have any effect on the patterns shown in the graphic.
+
+> Empty and full docking stations would affect interpretation of visual patterns in the graphic since consistently empty or full docking stations could be perceived as consistently low activity, and may not draw adequate attention from Citibike executives when considering where to roll out rebalancing initiatives. Stops with empty docking stations fail to register activity from rides that would have been taken, had there been bikes available. Full stations would divert riders from docking their bike at that station to other nearby stops.
+>
+> CitiBike rebalancing bikes would affect interpretation of the graphic since the audience is unable to distinguish whether a specific docking station is already receiving targeted rebalancing efforts from Citibike. It would prove important to know whether rebalancing efforts at a specific docking station were implemented previously, and whether lasting improvements have persisted. If rebalancing was successful, the graphic may appear more balanced and uniform in hue and luminance. It would be helpful to have some visual indication of where rebalancing efforts have already been rolled out, including a side-by-side comparison of before and after rebalancing.
+
+### Note that this is heavily adapted from an assignment written by Professor Spencer in his Spring 2024 section of APAN 5800 - Storytelling with Data.
+
